@@ -31,7 +31,8 @@ func main() {
 	switch os.Args[1] {
 	case "add":
 		if len(os.Args) < 4 {
-			fmt.Println("Usage: add <amount> <description>")
+			fmt.Println("Usage: add <amount> <description>  [date-time]")
+			fmt.Println("Example with date-time: add 100 \"Lunch\" \"2025-04-01 12:30\"")
 			return
 		}
 		amount, err := strconv.ParseFloat(os.Args[2], 64)
@@ -41,7 +42,8 @@ func main() {
 		}
 
 		description := os.Args[3]
-		addExpese(db, amount, description)
+		customTime := os.Args[4]
+		addExpese(db, amount, description, customTime)
 	case "list":
 		listExpenses(db)
 	case "total":
@@ -52,6 +54,10 @@ func main() {
 		exportMonthlyReport(db)
 	case "monthly-xlsx":
 		exportMonthlyReportXLSX(db)
+	case "detailed-xlsx":
+		exportDetailedMonthlyExpenses(db)
+	case "daily-monthly-xlsx":
+		exportDailyToMonthlyWithTotals(db)
 	default:
 		printUsage()
 	}
@@ -59,12 +65,17 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  add <amount> <description>   Add a new expense")
-	fmt.Println("  list                         List all expenses")
-	fmt.Println("  total                        Show total for today")
-	fmt.Println("  export                        Export expenses to CSV")
-	fmt.Println("  monthly-report                Export monthly totals to CSV")
-	fmt.Println("  monthly-xlsx                            Export monthly totals to Excel (.xlsx)")
+	fmt.Println("add <amount> <description>   Add a new expense")
+	fmt.Println("Optional date-time format: \"YYYY-MM-DD HH:MM\" (24h)")
+	fmt.Println("Example: add 100 \"Groceries\"  \"2025-04-01 18:30\"")
+	fmt.Println("Example: add 80 \"Snacks\" ")
+	fmt.Println("list        List all expenses")
+	fmt.Println("total       Show total for today")
+	fmt.Println("export      Export expenses to CSV")
+	fmt.Println("monthly-report  Export monthly totals to CSV")
+	fmt.Println("monthly-xlsx    Export monthly totals to Excel (.xlsx)")
+	fmt.Println("detailed-xlsx    Export daily expenses by month to Excel")
+	fmt.Println("daily-monthly-xlsx    Export daily montly expenses by month to Excel")
 }
 
 func createTable(db *sql.DB) {
@@ -82,10 +93,22 @@ func createTable(db *sql.DB) {
 	}
 }
 
-func addExpese(db *sql.DB, amount float64, description string) {
-	now := time.Now()
-	_, err := db.Exec("INSERT INTO expenses(amount, description, created_at) VALUES (?, ?, ?)",
-		amount, description, now.Format("2006-01-02 15:04:05"))
+func addExpese(db *sql.DB, amount float64, description string, customTime ...string) {
+
+	var t time.Time
+	var err error
+	if len(customTime) > 0 && customTime[0] != "" {
+		t, err = time.Parse("2006-01-02 15:04", customTime[0])
+		if err != nil {
+			fmt.Println("Invalid date format. Use YYYY-MM-DD HH:MM (24hr format)")
+			return
+		}
+	} else {
+		t = time.Now()
+	}
+
+	_, err = db.Exec("INSERT INTO expenses(amount, description, created_at) VALUES (?, ?, ?)",
+		amount, description, t.Format("2006-01-02 15:04:05"))
 
 	if err != nil {
 		log.Fatal(err)
@@ -225,7 +248,7 @@ func exportMonthlyReportXLSX(db *sql.DB) {
 
 	// Create a new Excel file
 	f := excelize.NewFile()
-	sheet := "Monthly Report"
+	sheet := "Sheet1"
 	f.NewSheet(sheet)
 
 	// Header row
@@ -243,8 +266,6 @@ func exportMonthlyReportXLSX(db *sql.DB) {
 
 		cellMonth := fmt.Sprintf("A%d", rowIndex)
 		cellTotal := fmt.Sprintf("B%d", rowIndex)
-		fmt.Println("month", month)
-		fmt.Println("total", total)
 		f.SetCellValue(sheet, cellMonth, month)
 		f.SetCellValue(sheet, cellTotal, total)
 
@@ -258,4 +279,292 @@ func exportMonthlyReportXLSX(db *sql.DB) {
 	}
 
 	fmt.Println("Monthly report exported to monthly_report.xlsx")
+}
+
+func exportDetailedMonthlyExpenses(db *sql.DB) {
+	rows, err := db.Query(`
+		SELECT 
+			DATE(created_at) as date,
+			description,
+			amount,
+			STRFTIME('%Y-%m', created_at) as month 
+		FROM expenses
+		ORDER BY month ASC, date ASC 
+	`)
+
+	if err != nil {
+		log.Fatal("Failed to query expenses:", err)
+	}
+	defer rows.Close()
+
+	type Expense struct {
+		Date        string
+		Description string
+		Amount      float64
+	}
+
+	monthlyData := make(map[string][]Expense)
+	monthlyTotals := make(map[string]float64)
+
+	for rows.Next() {
+		var e Expense
+		var month string
+		if err := rows.Scan(&e.Date, &e.Description, &e.Amount, &month); err != nil {
+			log.Fatal(err)
+		}
+		monthlyData[month] = append(monthlyData[month], e)
+		monthlyTotals[month] += e.Amount
+	}
+
+	f := excelize.NewFile()
+	styleBold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+
+	for month, expenses := range monthlyData {
+		sheet := month
+		if sheet != "Sheet1" {
+			f.NewSheet(sheet)
+		}
+		f.SetCellValue(sheet, "A1", "Date")
+		f.SetCellValue(sheet, "B1", "Description")
+		f.SetCellValue(sheet, "C1", "Amount")
+		f.SetCellStyle(sheet, "A1", "C1", styleBold)
+
+		rowIndex := 2
+		for _, e := range expenses {
+			f.SetCellValue(sheet, fmt.Sprintf("A%d", rowIndex), e.Date)
+			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), e.Description)
+			f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), e.Amount)
+			rowIndex++
+		}
+
+		// Add Total row
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), "Total")
+		totalFormula := fmt.Sprintf("SUM(C2:C%d)", rowIndex-1)
+		f.SetCellFormula(sheet, fmt.Sprintf("C%d", rowIndex), fmt.Sprintf("=%s", totalFormula))
+		f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("C%d", rowIndex), styleBold)
+	}
+
+	// Remove default sheet if unused
+	if len(monthlyData) > 0 {
+		f.DeleteSheet("Sheet1")
+	}
+
+	err = f.SaveAs("expenses_report.xlsx")
+	if err != nil {
+		log.Fatal("Failed to save Excel file:", err)
+	}
+
+	fmt.Println("Detailed monthly expense report exported to expenses_report.xlsx")
+}
+
+func exportDailyToMonthlyWithTotals(db *sql.DB) {
+	rows, err := db.Query(`
+		SELECT 
+			DATE(created_at) as date,
+			description,
+			amount,
+			STRFTIME('%Y-%m', created_at) as month
+		FROM expenses
+		ORDER BY month ASC, date ASC, created_at ASC
+	`)
+	if err != nil {
+		log.Fatal("Failed to query expenses:", err)
+	}
+	defer rows.Close()
+
+	type Expense struct {
+		Date        string
+		Description string
+		Amount      float64
+	}
+
+	// Map: month → []Expense
+	monthlyData := make(map[string][]Expense)
+
+	for rows.Next() {
+		var e Expense
+		var month string
+		if err := rows.Scan(&e.Date, &e.Description, &e.Amount, &month); err != nil {
+			log.Fatal(err)
+		}
+		monthlyData[month] = append(monthlyData[month], e)
+	}
+
+	f := excelize.NewFile()
+	styleBold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+
+	for month, expenses := range monthlyData {
+		sheet := month
+		if sheet != "Sheet1" {
+			f.NewSheet(sheet)
+		}
+
+		f.SetCellValue(sheet, "A1", "Date")
+		f.SetCellValue(sheet, "B1", "Description")
+		f.SetCellValue(sheet, "C1", "Amount")
+		f.SetCellStyle(sheet, "A1", "C1", styleBold)
+
+		rowIndex := 2
+		var day string
+		var dailyStartRow int
+		var monthTotal float64
+
+		for i, e := range expenses {
+			// On new day, remember start row
+			if day != e.Date {
+				if dailyStartRow != 0 && i != 0 {
+					// Insert daily total row
+					dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
+					formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
+					f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
+					f.SetCellFormula(sheet, dailyTotalCell, formula)
+					f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
+					rowIndex++
+				}
+				day = e.Date
+				dailyStartRow = rowIndex
+			}
+
+			// Write expense row
+			f.SetCellValue(sheet, fmt.Sprintf("A%d", rowIndex), e.Date)
+			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), e.Description)
+			f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), e.Amount)
+			monthTotal += e.Amount
+			rowIndex++
+		}
+
+		// Final daily total row (last day's total)
+		if dailyStartRow != 0 {
+			dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
+			formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
+			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
+			f.SetCellFormula(sheet, dailyTotalCell, formula)
+			f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
+			rowIndex++
+		}
+
+		// Final month total
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", month))
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), monthTotal)
+		f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("C%d", rowIndex), styleBold)
+	}
+
+	// Remove default "Sheet1" if unused
+	if len(monthlyData) > 0 {
+		f.DeleteSheet("Sheet1")
+	}
+
+	err = f.SaveAs("daily_monthly_report.xlsx")
+	if err != nil {
+		log.Fatal("Failed to save Excel file:", err)
+	}
+
+	fmt.Println("Report exported to daily_monthly_report.xlsx")
+}
+
+func exportDailyToMonthlyWithTotalsOld(db *sql.DB) {
+	rows, err := db.Query(`
+		SELECT 
+			DATE(created_at) as date,
+			description,
+			amount,
+			STRFTIME('%Y-%m', created_at) as month
+		FROM expenses 
+		ORDER BY month ASC, date ASC, created_at ASC
+	`)
+
+	if err != nil {
+		log.Fatal("Failed to query expenses:", err)
+	}
+	defer rows.Close()
+
+	type Expense struct {
+		Date        string
+		Description string
+		Amount      float64
+	}
+
+	// Map: month -> []Expense
+	monthlyData := make(map[string][]Expense)
+
+	for rows.Next() {
+		var e Expense
+		var month string
+		if err := rows.Scan(&e.Date, &e.Description, &e.Amount, &month); err != nil {
+			log.Fatal(err)
+		}
+		monthlyData[month] = append(monthlyData[month], e)
+	}
+
+	f := excelize.NewFile()
+	styleBold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+
+	for month, expenses := range monthlyData {
+		sheet := month
+		if sheet != "Sheet1" {
+			f.NewSheet(sheet)
+		}
+
+		f.SetCellValue(sheet, "A1", "Date")
+		f.SetCellValue(sheet, "B1", "Description")
+		f.SetCellValue(sheet, "C1", "Amount")
+		f.SetCellStyle(sheet, "A1", "C1", styleBold)
+
+		rowIndex := 2
+		var day string
+		var dailyStartRow int
+		var monthTotal float64
+
+		for i, e := range expenses {
+			// On new day, remember start row
+			if day != e.Date {
+				if dailyStartRow != 0 && i != 0 {
+					// Insert daily total row
+					dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
+					formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
+					f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
+					f.SetCellFormula(sheet, dailyTotalCell, formula)
+					f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
+					rowIndex++
+				}
+				day = e.Date
+				dailyStartRow = rowIndex
+			}
+
+			// Write expense row
+			f.SetCellValue(sheet, fmt.Sprintf("A%d", rowIndex), e.Date)
+			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), e.Description)
+			f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), e.Amount)
+			monthTotal += e.Amount
+			rowIndex++
+		}
+
+		// Final daily total row (Last day's total)
+		if dailyStartRow != 0 {
+			dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
+			formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
+			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
+			f.SetCellValue(sheet, dailyTotalCell, formula)
+			f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
+			rowIndex++
+		}
+
+		// Final month total
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", month))
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), monthTotal)
+		f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("C%d", rowIndex), styleBold)
+	}
+
+	// Remove default "Sheet1" if unused
+	if len(monthlyData) > 0 {
+		f.DeleteSheet("Sheet1")
+	}
+
+	err = f.SaveAs("daily_monthly_report.xlsx")
+	if err != nil {
+		log.Fatal("Failed to save Excel file:", err)
+	}
+
+	fmt.Println("Report exported to daily_monthly_report.xlsx")
+
 }
