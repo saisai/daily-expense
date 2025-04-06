@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/xuri/excelize/v2"
 )
 
 func main() {
@@ -44,6 +46,12 @@ func main() {
 		listExpenses(db)
 	case "total":
 		totalToday(db)
+	case "export":
+		exportExpenses(db)
+	case "monthly-report":
+		exportMonthlyReport(db)
+	case "monthly-xlsx":
+		exportMonthlyReportXLSX(db)
 	default:
 		printUsage()
 	}
@@ -54,6 +62,9 @@ func printUsage() {
 	fmt.Println("  add <amount> <description>   Add a new expense")
 	fmt.Println("  list                         List all expenses")
 	fmt.Println("  total                        Show total for today")
+	fmt.Println("  export                        Export expenses to CSV")
+	fmt.Println("  monthly-report                Export monthly totals to CSV")
+	fmt.Println("  monthly-xlsx                            Export monthly totals to Excel (.xlsx)")
 }
 
 func createTable(db *sql.DB) {
@@ -117,4 +128,134 @@ func totalToday(db *sql.DB) {
 		log.Fatal(err)
 	}
 	fmt.Printf("Total spent today (%s): $%.2f\n", today, total)
+}
+
+func exportExpenses(db *sql.DB) {
+	rows, err := db.Query("SELECT amount, description, created_at FROM expenses ORDER BY created_at DESC;")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	file, err := os.Create("expenses.csv")
+	if err != nil {
+		log.Fatal("Could not create CSV file:", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write headers
+	writer.Write([]string{"Amount", "Descriptioin", "Date"})
+
+	// Write each row
+	for rows.Next() {
+		var amount float64
+		var description, createdAt string
+		err := rows.Scan(&amount, &description, &createdAt)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		writer.Write([]string{
+			fmt.Sprintf("%.2f", amount),
+			description,
+			createdAt,
+		})
+	}
+	fmt.Println("Expenses exported to expenses.csv")
+}
+
+func exportMonthlyReport(db *sql.DB) {
+	rows, err := db.Query(`
+		SELECT
+			STRFTIME('%Y-%m', created_at) as month,
+			IFNULL(SUM(amount), 0) AS total
+		FROM expenses
+		GROUP BY month
+		ORDER BY month DESC
+	`)
+	if err != nil {
+		log.Fatal("Failed to query monthly totals:", err)
+	}
+	defer rows.Close()
+
+	// Create csv file
+	file, err := os.Create("monthly_report.csv")
+	if err != nil {
+		log.Fatal("Could not create CSV file:", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	// Write headers
+	writer.Write([]string{"Month", "Total Amount"})
+
+	// Write each month's data
+
+	for rows.Next() {
+		var month string
+		var total float64
+		err := rows.Scan(&month, &total)
+		if err != nil {
+			log.Fatal(err)
+		}
+		writer.Write([]string{month, fmt.Sprintf("%.2f", total)})
+	}
+
+	fmt.Println("Monthly report exported to monthly_report.csv")
+}
+
+func exportMonthlyReportXLSX(db *sql.DB) {
+	rows, err := db.Query(`
+		SELECT 
+			STRFTIME('%Y-%m', created_at) AS month,
+			IFNULL(SUM(amount), 0) AS total
+		FROM expenses
+		GROUP BY month
+		ORDER BY month DESC
+	`)
+	if err != nil {
+		log.Fatal("Failed to query monthly totals:", err)
+	}
+	defer rows.Close()
+
+	// Create a new Excel file
+	f := excelize.NewFile()
+	sheet := "Monthly Report"
+	f.NewSheet(sheet)
+
+	// Header row
+	f.SetCellValue(sheet, "A1", "Month")
+	f.SetCellValue(sheet, "B1", "Total Amount")
+
+	rowIndex := 2
+	for rows.Next() {
+		var month string
+		var total float64
+		err := rows.Scan(&month, &total)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		cellMonth := fmt.Sprintf("A%d", rowIndex)
+		cellTotal := fmt.Sprintf("B%d", rowIndex)
+		fmt.Println("month", month)
+		fmt.Println("total", total)
+		f.SetCellValue(sheet, cellMonth, month)
+		f.SetCellValue(sheet, cellTotal, total)
+
+		rowIndex++
+	}
+
+	// Save the file
+	err = f.SaveAs("monthly_report.xlsx")
+	if err != nil {
+		log.Fatal("Failed to save Excel file:", err)
+	}
+
+	fmt.Println("Monthly report exported to monthly_report.xlsx")
 }
