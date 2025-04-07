@@ -58,6 +58,17 @@ func main() {
 		exportDetailedMonthlyExpenses(db)
 	case "daily-monthly-xlsx":
 		exportDailyToMonthlyWithTotals(db)
+	case "delete":
+		if len(os.Args) < 3 {
+			fmt.Println("Usage: delete <id>")
+			return
+		}
+		id, err := strconv.Atoi(os.Args[2])
+		if err != nil {
+			fmt.Println("Invalid ID")
+			return
+		}
+		deleteExpense(db, id)
 	default:
 		printUsage()
 	}
@@ -76,6 +87,7 @@ func printUsage() {
 	fmt.Println("monthly-xlsx    Export monthly totals to Excel (.xlsx)")
 	fmt.Println("detailed-xlsx    Export daily expenses by month to Excel")
 	fmt.Println("daily-monthly-xlsx    Export daily montly expenses by month to Excel")
+	fmt.Println("delete To delete the expense by ID")
 }
 
 func createTable(db *sql.DB) {
@@ -567,4 +579,17 @@ func exportDailyToMonthlyWithTotalsOld(db *sql.DB) {
 
 	fmt.Println("Report exported to daily_monthly_report.xlsx")
 
+}
+
+func deleteExpense(db *sql.DB, id int) {
+	result, err := db.Exec("DELETE FROM expenses WHERE id = ?", id)
+	if err != nil {
+		log.Fatal("Failed to delete expense:", err)
+	}
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		fmt.Printf("No expense found with ID %d\n", id)
+	} else {
+		fmt.Printf("Deleted expense with ID %d\n", id)
+	}
 }
