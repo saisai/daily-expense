@@ -1,0 +1,8 @@
+Next Steps (Optional)
+Add categories (food, transport, etc.)
+
+Export to CSV
+
+Use flags: --amount, --desc (via flag package or cobra CLI)
+
+Would you like me to upgrade this into a proper CLI with flags or auto-completion using cobra?

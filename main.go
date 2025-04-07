@@ -58,17 +58,28 @@ func main() {
 		exportDetailedMonthlyExpenses(db)
 	case "daily-monthly-xlsx":
 		exportDailyToMonthlyWithTotals(db)
+		// case "delete":
+		// 	if len(os.Args) < 3 {
+		// 		fmt.Println("Usage: delete <id>")
+		// 		return
+		// 	}
+		// 	id, err := strconv.Atoi(os.Args[2])
+		// 	if err != nil {
+		// 		fmt.Println("Invalid ID")
+		// 		return
+		// 	}
+		// 	deleteExpense(db, id)
 	case "delete":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: delete <id>")
-			return
+		if len(os.Args) == 3 {
+			id, _ := strconv.Atoi(os.Args[2])
+			deleteExpense(db, id)
+		} else if len(os.Args) == 4 && os.Args[2] == "date" {
+			deleteByDate(db, os.Args[3])
+		} else {
+			fmt.Println("Usage: delete <id> OR delete date <YYYY-MM-DD>")
 		}
-		id, err := strconv.Atoi(os.Args[2])
-		if err != nil {
-			fmt.Println("Invalid ID")
-			return
-		}
-		deleteExpense(db, id)
+	case "undo":
+		undoDelete(db)
 	default:
 		printUsage()
 	}
@@ -88,6 +99,7 @@ func printUsage() {
 	fmt.Println("detailed-xlsx    Export daily expenses by month to Excel")
 	fmt.Println("daily-monthly-xlsx    Export daily montly expenses by month to Excel")
 	fmt.Println("delete To delete the expense by ID")
+	fmt.Println("undo To restore all expenses from deleting.")
 }
 
 func createTable(db *sql.DB) {
@@ -103,6 +115,15 @@ func createTable(db *sql.DB) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS trash(
+			id INTEGER,
+			description TEXT,
+			amount REAL,
+			created_at DATETIME
+		)
+	`)
 }
 
 func addExpese(db *sql.DB, amount float64, description string, customTime ...string) {
@@ -581,7 +602,7 @@ func exportDailyToMonthlyWithTotalsOld(db *sql.DB) {
 
 }
 
-func deleteExpense(db *sql.DB, id int) {
+func deleteExpenseOld(db *sql.DB, id int) {
 	result, err := db.Exec("DELETE FROM expenses WHERE id = ?", id)
 	if err != nil {
 		log.Fatal("Failed to delete expense:", err)
@@ -592,4 +613,142 @@ func deleteExpense(db *sql.DB, id int) {
 	} else {
 		fmt.Printf("Deleted expense with ID %d\n", id)
 	}
+}
+
+func deleteExpense(db *sql.DB, id int) {
+	var exp struct {
+		Description string
+		Amount      float64
+		CreatedAt   string
+	}
+
+	row := db.QueryRow("SELECT description, amount, created_at FROM expenses WHERE id=?", id)
+	err := row.Scan(&exp.Description, &exp.Amount, &exp.CreatedAt)
+	if err == sql.ErrNoRows {
+		fmt.Printf("No expense found with ID %d\n", id)
+		return
+	} else if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Delete this expense?\n")
+	fmt.Printf("-> %s | %s | %.2f\n", exp.CreatedAt, exp.Description, exp.Amount)
+	fmt.Printf("Type 'yes' to confirm: ")
+
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "yes" {
+		fmt.Println("Cancelled")
+		return
+	}
+
+	// Backup to trash
+	_, err = db.Exec(`
+		INSERT INTO trash(id, description, amount, created_at)
+		SELECT id, description, amount, created_at FROM expenses WHERE id = ?`, id)
+	if err != nil {
+		log.Fatal("Failed to backup to trash: ", err)
+	}
+
+	// Now delete
+	_, err = db.Exec("DELETE FROM expenses WHERE id = ?", id)
+	if err != nil {
+		log.Fatal("Failed to delete:", err)
+	}
+
+	fmt.Printf("Deleted expense with ID %d. You can undo it with: undo\n", id)
+}
+
+func undoDelete(db *sql.DB) {
+	row := db.QueryRow("SELECT id, description, amount, created_at FROM trash ORDER BY ROWID DESC LIMIT 1")
+
+	var id int
+	var desc, createdAt string
+	var amount float64
+
+	err := row.Scan(&id, &desc, &amount, &createdAt)
+	if err == sql.ErrNoRows {
+		fmt.Println("No deleted expense to undo.")
+		return
+	} else if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO expenses (id, description, amount, created_at)
+		VALUES(?, ?, ?, ?)`, id, desc, amount, createdAt)
+	if err != nil {
+		log.Fatal("Failed to restore expense:", err)
+	}
+
+	_, err = db.Exec("DELETE FROM trash WHERE id=? AND created_at = ?", id, createdAt)
+	if err != nil {
+		log.Fatal("Failed to remove trash:", err)
+	}
+
+	fmt.Printf("Restored deleted expense: %s | %.2f\n", desc, amount)
+}
+
+func deleteByDate(db *sql.DB, date string) {
+	rows, err := db.Query("SELECT id, description, amount, created_at FROM expenses WHERE DATE(created_at) = ?", date)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var toDelete []struct {
+		ID          int
+		Description string
+		Amount      float64
+		CreatedAt   string
+	}
+
+	for rows.Next() {
+		var e struct {
+			ID          int
+			Description string
+			Amount      float64
+			CreatedAt   string
+		}
+		err := rows.Scan(&e.ID, &e.Description, &e.Amount, &e.CreatedAt)
+		if err != nil {
+			log.Fatal(err)
+		}
+		toDelete = append(toDelete, e)
+	}
+
+	if len(toDelete) == 0 {
+		fmt.Println("No expenses found for that date.")
+		return
+	}
+
+	fmt.Printf("Delete all %d expenses from %s\n", len(toDelete), date)
+	fmt.Print("Type 'yes' to confirm: ")
+	var confirm string
+	fmt.Scanln(&confirm)
+	if confirm != "yes" {
+		fmt.Println("Cancelled.")
+		return
+	}
+
+	tx, _ := db.Begin()
+
+	for _, e := range toDelete {
+		_, err := tx.Exec(`
+			INSERT INTO trash (id, description, amount, created_at)
+			VALUES(?, ?, ?, ?)`, e.ID, e.Description, e.Amount, e.CreatedAt)
+		if err != nil {
+			tx.Rollback()
+			log.Fatal(err)
+		}
+
+		_, err = tx.Exec(`DELETE FROM expenses WHERE id = ?`, e.ID)
+		if err != nil {
+			tx.Rollback()
+			log.Fatal(err)
+		}
+	}
+	tx.Commit()
+
+	fmt.Printf("Deleted %d expenses from %s. You can undo the last one with: undo\n", len(toDelete), date)
 }

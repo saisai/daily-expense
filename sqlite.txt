@@ -1,0 +1,7 @@
+sqlite3 expenses.db .tables
+ sqlite3 expenses.db "SELECT * FROM trash;"
+
+
+Database Info : To get general information about the database, use:
+sqlite3 expenses.db "PRAGMA database_list;"
+
