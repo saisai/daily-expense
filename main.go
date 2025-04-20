@@ -14,6 +14,7 @@ import (
 )
 
 func main() {
+	fmt.Println("start...")
 	// Connect or create SQLite DB
 	db, err := sql.Open("sqlite3", "./expenses.db")
 	if err != nil {
@@ -30,10 +31,12 @@ func main() {
 
 	switch os.Args[1] {
 	case "add":
-		if len(os.Args) < 4 {
+		customTime := ""
+		if len(os.Args) <= 5 {
 			fmt.Println("Usage: add <amount> <description>  [date-time]")
 			fmt.Println("Example with date-time: add 100 \"Lunch\" \"2025-04-01 12:30\"")
-			return
+			customTime = os.Args[4]
+			// return
 		}
 		amount, err := strconv.ParseFloat(os.Args[2], 64)
 		if err != nil {
@@ -42,7 +45,7 @@ func main() {
 		}
 
 		description := os.Args[3]
-		customTime := os.Args[4]
+		fmt.Println("customTime ", customTime)
 		addExpese(db, amount, description, customTime)
 	case "list":
 		listExpenses(db)
@@ -58,17 +61,6 @@ func main() {
 		exportDetailedMonthlyExpenses(db)
 	case "daily-monthly-xlsx":
 		exportDailyToMonthlyWithTotals(db)
-		// case "delete":
-		// 	if len(os.Args) < 3 {
-		// 		fmt.Println("Usage: delete <id>")
-		// 		return
-		// 	}
-		// 	id, err := strconv.Atoi(os.Args[2])
-		// 	if err != nil {
-		// 		fmt.Println("Invalid ID")
-		// 		return
-		// 	}
-		// 	deleteExpense(db, id)
 	case "delete":
 		if len(os.Args) == 3 {
 			id, _ := strconv.Atoi(os.Args[2])
@@ -80,6 +72,18 @@ func main() {
 		}
 	case "undo":
 		undoDelete(db)
+	case "report-daily":
+		fmt.Println("report-daily")
+		if len(os.Args) != 4 {
+			fmt.Println("Usage: report-daily <YYYY-MM> <filename.xlsx>")
+			return
+		}
+		month := os.Args[2]    // like "2025-04"
+		filename := os.Args[3] // like "april_report.xlsx"
+		if err := exportDailyTotalsToExcel(db, month, filename); err != nil {
+			log.Fatal("Export failed:", err)
+		}
+		fmt.Println("Exported to", filename)
 	default:
 		printUsage()
 	}
@@ -100,6 +104,7 @@ func printUsage() {
 	fmt.Println("daily-monthly-xlsx    Export daily montly expenses by month to Excel")
 	fmt.Println("delete To delete the expense by ID")
 	fmt.Println("undo To restore all expenses from deleting.")
+	fmt.Println("report-daily 2025-04 april_expenses.xlsx")
 }
 
 func createTable(db *sql.DB) {
@@ -127,7 +132,7 @@ func createTable(db *sql.DB) {
 }
 
 func addExpese(db *sql.DB, amount float64, description string, customTime ...string) {
-
+	fmt.Println("addExpense")
 	var t time.Time
 	var err error
 	if len(customTime) > 0 && customTime[0] != "" {
@@ -751,4 +756,84 @@ func deleteByDate(db *sql.DB, date string) {
 	tx.Commit()
 
 	fmt.Printf("Deleted %d expenses from %s. You can undo the last one with: undo\n", len(toDelete), date)
+}
+
+func getDailyTotals(db *sql.DB, month string) ([]struct {
+	Date  string
+	Total float64
+}, float64, error) {
+	rows, err := db.Query(`
+		SELECT DATE(created_at) as day, SUM(amount) as total
+		FROM expenses
+		WHERE strftime('%Y-%m', created_at) = ?
+		GROUP BY day
+		ORDER BY day ASC
+	`, month)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var data []struct {
+		Date  string
+		Total float64
+	}
+	var monthlyTotal float64
+
+	for rows.Next() {
+		var date string
+		var total float64
+		if err := rows.Scan(&date, &total); err != nil {
+			return nil, 0, err
+		}
+		data = append(data, struct {
+			Date  string
+			Total float64
+		}{date, total})
+		monthlyTotal += total
+	}
+
+	return data, monthlyTotal, nil
+}
+
+func exportDailyTotalsToExcel(db *sql.DB, month string, filename string) error {
+	data, monthlyTotal, err := getDailyTotals(db, month)
+	if err != nil {
+		return err
+	}
+
+	f := excelize.NewFile()
+	sheet := "Sheet1"
+	f.NewSheet(sheet)
+
+	// f := excelize.NewFile()
+	// styleBold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+
+	// f.SetActiveSheet(index)
+
+	// Header
+	f.SetCellValue(sheet, "A1", "Date")
+	f.SetCellValue(sheet, "B1", "Total")
+
+	// Bold header style
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	f.SetCellStyle(sheet, "A1", "B1", headerStyle)
+
+	// Daily rows
+	for i, row := range data {
+		cellDate := fmt.Sprintf("A%d", i+2)
+		cellTotal := fmt.Sprintf("B%d", i+2)
+		f.SetCellValue(sheet, cellDate, row.Date)
+		f.SetCellValue(sheet, cellTotal, row.Total)
+	}
+
+	// Monthly total
+	totalRow := len(data) + 2
+	f.SetCellValue(sheet, fmt.Sprintf("A%d", totalRow), "Monthly Total")
+	f.SetCellValue(sheet, fmt.Sprintf("B%d", totalRow), monthlyTotal)
+
+	boldStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	f.SetCellStyle(sheet, fmt.Sprintf("A%d", totalRow), fmt.Sprintf("B%d", totalRow), boldStyle)
+
+	return f.SaveAs(filename)
 }
