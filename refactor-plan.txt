@@ -1,0 +1,19 @@
+expense-cli/
+│
+├── cmd/
+│   ├── add.go
+│   ├── delete.go
+│   ├── export.go
+│   ├── report.go
+│   └── root.go
+│
+├── db/
+│   └── postgres.go
+│
+├── models/
+│   └── expense.go
+│
+├── .env
+├── go.mod
+├── go.sum
+└── main.go
