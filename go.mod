@@ -3,7 +3,8 @@ module expense-tracker
 go 1.23.5
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.27
+	github.com/joho/godotenv v1.5.1
+	github.com/lib/pq v1.10.9
 	github.com/xuri/excelize/v2 v2.9.0
 )
 

@@ -9,20 +9,79 @@ import (
 	"strconv"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 	"github.com/xuri/excelize/v2"
 )
 
+func initDB(db *sql.DB) {
+	_, err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS expenses (
+            id SERIAL PRIMARY KEY,
+            description TEXT NOT NULL,
+            amount NUMERIC(10, 2) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS trash (
+            id INTEGER,
+            description TEXT,
+            amount NUMERIC(10, 2),
+            created_at TIMESTAMP
+        );
+    `)
+	if err != nil {
+		log.Fatal("Failed to create tables:", err)
+	}
+}
+
+func connectPostgres() (*sql.DB, error) {
+	// Load .env
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	user := os.Getenv("DB_USER")
+	password := os.Getenv("DB_PASSWORD")
+	dbname := os.Getenv("DB_NAME")
+	host := os.Getenv("DB_HOST")
+	port := os.Getenv("DB_PORT")
+
+	connStr := fmt.Sprintf(
+		"postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		user, password, host, port, dbname,
+	)
+
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Optional: test connection
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	return db, nil
+}
+
 func main() {
 	fmt.Println("start...")
-	// Connect or create SQLite DB
-	db, err := sql.Open("sqlite3", "./expenses.db")
+
+	db, err := connectPostgres()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
 
-	createTable(db)
+	// Connect or create SQLite DB
+	// db, err := sql.Open("sqlite3", "./expenses.db")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	defer db.Close()
+	initDB(db)
+	// createTable(db)
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -32,12 +91,12 @@ func main() {
 	switch os.Args[1] {
 	case "add":
 		customTime := ""
-		if len(os.Args) <= 5 {
+		if len(os.Args) > 4 {
 			fmt.Println("Usage: add <amount> <description>  [date-time]")
 			fmt.Println("Example with date-time: add 100 \"Lunch\" \"2025-04-01 12:30\"")
 			customTime = os.Args[4]
-			// return
 		}
+
 		amount, err := strconv.ParseFloat(os.Args[2], 64)
 		if err != nil {
 			fmt.Println("Invalid amount.")
@@ -107,30 +166,6 @@ func printUsage() {
 	fmt.Println("report-daily 2025-04 april_expenses.xlsx")
 }
 
-func createTable(db *sql.DB) {
-	query := `
-	CREATE TABLE IF NOT EXISTS expenses(
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		amount REAL,
-		description TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-	`
-	_, err := db.Exec(query)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS trash(
-			id INTEGER,
-			description TEXT,
-			amount REAL,
-			created_at DATETIME
-		)
-	`)
-}
-
 func addExpese(db *sql.DB, amount float64, description string, customTime ...string) {
 	fmt.Println("addExpense")
 	var t time.Time
@@ -145,7 +180,7 @@ func addExpese(db *sql.DB, amount float64, description string, customTime ...str
 		t = time.Now()
 	}
 
-	_, err = db.Exec("INSERT INTO expenses(amount, description, created_at) VALUES (?, ?, ?)",
+	_, err = db.Exec("INSERT INTO expenses(amount, description, created_at) VALUES ($1, $2, $3)",
 		amount, description, t.Format("2006-01-02 15:04:05"))
 
 	if err != nil {
@@ -180,7 +215,7 @@ func totalToday(db *sql.DB) {
 	row := db.QueryRow(`
 		SELECT IFNULL(SUM(amount), 0)
 		FROM expenses
-		WHERE DATE(created_at) = ?
+		WHERE DATE(created_at) = $1
 	`, today)
 
 	var total float64
@@ -231,7 +266,7 @@ func exportExpenses(db *sql.DB) {
 func exportMonthlyReport(db *sql.DB) {
 	rows, err := db.Query(`
 		SELECT
-			STRFTIME('%Y-%m', created_at) as month,
+			TO_CHAR(created_at, 'YYYY-MM') as month,
 			IFNULL(SUM(amount), 0) AS total
 		FROM expenses
 		GROUP BY month
@@ -273,7 +308,7 @@ func exportMonthlyReport(db *sql.DB) {
 func exportMonthlyReportXLSX(db *sql.DB) {
 	rows, err := db.Query(`
 		SELECT 
-			STRFTIME('%Y-%m', created_at) AS month,
+			TO_CHAR(created_at, 'YYYY-MM') as month,			
 			IFNULL(SUM(amount), 0) AS total
 		FROM expenses
 		GROUP BY month
@@ -325,7 +360,7 @@ func exportDetailedMonthlyExpenses(db *sql.DB) {
 			DATE(created_at) as date,
 			description,
 			amount,
-			STRFTIME('%Y-%m', created_at) as month 
+			TO_CHAR(created_at, 'YYYY-MM') as month			
 		FROM expenses
 		ORDER BY month ASC, date ASC 
 	`)
@@ -401,7 +436,7 @@ func exportDailyToMonthlyWithTotals(db *sql.DB) {
 			DATE(created_at) as date,
 			description,
 			amount,
-			STRFTIME('%Y-%m', created_at) as month
+			TO_CHAR(created_at, 'YYYY-MM') as month			
 		FROM expenses
 		ORDER BY month ASC, date ASC, created_at ASC
 	`)
@@ -500,126 +535,6 @@ func exportDailyToMonthlyWithTotals(db *sql.DB) {
 	fmt.Println("Report exported to daily_monthly_report.xlsx")
 }
 
-func exportDailyToMonthlyWithTotalsOld(db *sql.DB) {
-	rows, err := db.Query(`
-		SELECT 
-			DATE(created_at) as date,
-			description,
-			amount,
-			STRFTIME('%Y-%m', created_at) as month
-		FROM expenses 
-		ORDER BY month ASC, date ASC, created_at ASC
-	`)
-
-	if err != nil {
-		log.Fatal("Failed to query expenses:", err)
-	}
-	defer rows.Close()
-
-	type Expense struct {
-		Date        string
-		Description string
-		Amount      float64
-	}
-
-	// Map: month -> []Expense
-	monthlyData := make(map[string][]Expense)
-
-	for rows.Next() {
-		var e Expense
-		var month string
-		if err := rows.Scan(&e.Date, &e.Description, &e.Amount, &month); err != nil {
-			log.Fatal(err)
-		}
-		monthlyData[month] = append(monthlyData[month], e)
-	}
-
-	f := excelize.NewFile()
-	styleBold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
-
-	for month, expenses := range monthlyData {
-		sheet := month
-		if sheet != "Sheet1" {
-			f.NewSheet(sheet)
-		}
-
-		f.SetCellValue(sheet, "A1", "Date")
-		f.SetCellValue(sheet, "B1", "Description")
-		f.SetCellValue(sheet, "C1", "Amount")
-		f.SetCellStyle(sheet, "A1", "C1", styleBold)
-
-		rowIndex := 2
-		var day string
-		var dailyStartRow int
-		var monthTotal float64
-
-		for i, e := range expenses {
-			// On new day, remember start row
-			if day != e.Date {
-				if dailyStartRow != 0 && i != 0 {
-					// Insert daily total row
-					dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
-					formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
-					f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
-					f.SetCellFormula(sheet, dailyTotalCell, formula)
-					f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
-					rowIndex++
-				}
-				day = e.Date
-				dailyStartRow = rowIndex
-			}
-
-			// Write expense row
-			f.SetCellValue(sheet, fmt.Sprintf("A%d", rowIndex), e.Date)
-			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), e.Description)
-			f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), e.Amount)
-			monthTotal += e.Amount
-			rowIndex++
-		}
-
-		// Final daily total row (Last day's total)
-		if dailyStartRow != 0 {
-			dailyTotalCell := fmt.Sprintf("C%d", rowIndex)
-			formula := fmt.Sprintf("SUM(C%d:C%d)", dailyStartRow, rowIndex-1)
-			f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", day))
-			f.SetCellValue(sheet, dailyTotalCell, formula)
-			f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), dailyTotalCell, styleBold)
-			rowIndex++
-		}
-
-		// Final month total
-		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("Total (%s)", month))
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIndex), monthTotal)
-		f.SetCellStyle(sheet, fmt.Sprintf("B%d", rowIndex), fmt.Sprintf("C%d", rowIndex), styleBold)
-	}
-
-	// Remove default "Sheet1" if unused
-	if len(monthlyData) > 0 {
-		f.DeleteSheet("Sheet1")
-	}
-
-	err = f.SaveAs("daily_monthly_report.xlsx")
-	if err != nil {
-		log.Fatal("Failed to save Excel file:", err)
-	}
-
-	fmt.Println("Report exported to daily_monthly_report.xlsx")
-
-}
-
-func deleteExpenseOld(db *sql.DB, id int) {
-	result, err := db.Exec("DELETE FROM expenses WHERE id = ?", id)
-	if err != nil {
-		log.Fatal("Failed to delete expense:", err)
-	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		fmt.Printf("No expense found with ID %d\n", id)
-	} else {
-		fmt.Printf("Deleted expense with ID %d\n", id)
-	}
-}
-
 func deleteExpense(db *sql.DB, id int) {
 	var exp struct {
 		Description string
@@ -627,7 +542,7 @@ func deleteExpense(db *sql.DB, id int) {
 		CreatedAt   string
 	}
 
-	row := db.QueryRow("SELECT description, amount, created_at FROM expenses WHERE id=?", id)
+	row := db.QueryRow("SELECT description, amount, created_at FROM expenses WHERE id=$1", id)
 	err := row.Scan(&exp.Description, &exp.Amount, &exp.CreatedAt)
 	if err == sql.ErrNoRows {
 		fmt.Printf("No expense found with ID %d\n", id)
@@ -650,13 +565,13 @@ func deleteExpense(db *sql.DB, id int) {
 	// Backup to trash
 	_, err = db.Exec(`
 		INSERT INTO trash(id, description, amount, created_at)
-		SELECT id, description, amount, created_at FROM expenses WHERE id = ?`, id)
+		SELECT id, description, amount, created_at FROM expenses WHERE id = $1`, id)
 	if err != nil {
 		log.Fatal("Failed to backup to trash: ", err)
 	}
 
 	// Now delete
-	_, err = db.Exec("DELETE FROM expenses WHERE id = ?", id)
+	_, err = db.Exec("DELETE FROM expenses WHERE id = $1", id)
 	if err != nil {
 		log.Fatal("Failed to delete:", err)
 	}
@@ -686,7 +601,7 @@ func undoDelete(db *sql.DB) {
 		log.Fatal("Failed to restore expense:", err)
 	}
 
-	_, err = db.Exec("DELETE FROM trash WHERE id=? AND created_at = ?", id, createdAt)
+	_, err = db.Exec("DELETE FROM trash WHERE id=? AND created_at = $1", id, createdAt)
 	if err != nil {
 		log.Fatal("Failed to remove trash:", err)
 	}
@@ -695,7 +610,7 @@ func undoDelete(db *sql.DB) {
 }
 
 func deleteByDate(db *sql.DB, date string) {
-	rows, err := db.Query("SELECT id, description, amount, created_at FROM expenses WHERE DATE(created_at) = ?", date)
+	rows, err := db.Query("SELECT id, description, amount, created_at FROM expenses WHERE DATE(created_at) = $1", date)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -741,13 +656,13 @@ func deleteByDate(db *sql.DB, date string) {
 	for _, e := range toDelete {
 		_, err := tx.Exec(`
 			INSERT INTO trash (id, description, amount, created_at)
-			VALUES(?, ?, ?, ?)`, e.ID, e.Description, e.Amount, e.CreatedAt)
+			VALUES($1, $2, $3, $4)`, e.ID, e.Description, e.Amount, e.CreatedAt)
 		if err != nil {
 			tx.Rollback()
 			log.Fatal(err)
 		}
 
-		_, err = tx.Exec(`DELETE FROM expenses WHERE id = ?`, e.ID)
+		_, err = tx.Exec(`DELETE FROM expenses WHERE id = $1`, e.ID)
 		if err != nil {
 			tx.Rollback()
 			log.Fatal(err)
@@ -765,7 +680,7 @@ func getDailyTotals(db *sql.DB, month string) ([]struct {
 	rows, err := db.Query(`
 		SELECT DATE(created_at) as day, SUM(amount) as total
 		FROM expenses
-		WHERE strftime('%Y-%m', created_at) = ?
+		WHERE TO_CHAR(created_at, 'YYYY-MM') = $1
 		GROUP BY day
 		ORDER BY day ASC
 	`, month)
