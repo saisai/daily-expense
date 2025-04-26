@@ -3,6 +3,7 @@ package cmd
 import (
 	"expense-tracker/db"
 	"expense-tracker/models"
+	"expense-tracker/pkg/logger"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -32,6 +33,7 @@ var reportCmd = &cobra.Command{
 		for _, t := range totals {
 			fmt.Printf("%s : %.2f\n", t.Date, t.Total)
 		}
-		fmt.Printf("Monthly Total: %.2f\n", monthlyTotal)
+
+		logger.Info(fmt.Sprintf("Monthly Total: %.2f\n", monthlyTotal))
 	},
 }

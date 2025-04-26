@@ -25,4 +25,5 @@ func init() {
 	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(exportCmd)
 	rootCmd.AddCommand(reportCmd)
+	rootCmd.AddCommand(listCmd)
 }

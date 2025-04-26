@@ -3,6 +3,7 @@ package cmd
 import (
 	"expense-tracker/db"
 	"expense-tracker/models"
+	"expense-tracker/pkg/logger"
 	"fmt"
 	"time"
 
@@ -13,7 +14,7 @@ var addCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add a new expense",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("args ", len(args))
+
 		if len(args) < 2 {
 			fmt.Println("Usage: add <description> <amount>")
 			return
@@ -38,6 +39,6 @@ var addCmd = &cobra.Command{
 			panic(err)
 		}
 
-		fmt.Println("Expense added")
+		logger.Info("Expense added")
 	},
 }
