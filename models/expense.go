@@ -11,7 +11,7 @@ import (
 type Expense struct {
 	ID          int
 	Description string
-	Amount      string
+	Amount      float64
 	CreatedAt   time.Time
 }
 
@@ -122,4 +122,50 @@ func ListExpensesByMonth(db *sql.DB, month string) ([]Expense, error) {
 	}
 
 	return expenses, nil
+}
+
+func ExportExpensesDetailToExcel(expenses []Expense, month, filename string) error {
+	f := excelize.NewFile()
+
+	sheet := "Expenses-" + month
+	f.NewSheet(sheet)
+	index, err := f.NewSheet(sheet)
+
+	if err != nil {
+		panic(err)
+	}
+
+	f.SetActiveSheet(index)
+
+	// f.SetActiveSheet(f.GetSheetIndex(sheet))
+
+	// Header
+	f.SetCellValue(sheet, "A1", "Date")
+	f.SetCellValue(sheet, "B1", "Description")
+	f.SetCellValue(sheet, "C1", "Amount")
+
+	headerStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	f.SetCellStyle(sheet, "A1", "C1", headerStyle)
+
+	for i, exp := range expenses {
+		row := i + 2
+		f.SetCellValue(sheet, fmt.Sprintf("A%d", row), exp.CreatedAt.Format("2006-01-02"))
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", row), exp.Description)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", row), exp.Amount)
+	}
+
+	// ➡️ Add Total
+	totalRow := len(expenses) + 2
+
+	f.SetCellValue(sheet, fmt.Sprintf("B%d", totalRow), "Total")
+	sumFormula := fmt.Sprintf("SUM(C2:C%d)", totalRow-1)
+	f.SetCellFormula(sheet, fmt.Sprintf("C%d", totalRow), fmt.Sprintf("=%s", sumFormula))
+
+	// Style the total row
+	totalStyle, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
+	f.SetCellStyle(sheet, fmt.Sprintf("B%d", totalRow), fmt.Sprintf("C%d", totalRow), totalStyle)
+
+	f.DeleteSheet("Sheet1")
+
+	return f.SaveAs(filename)
 }

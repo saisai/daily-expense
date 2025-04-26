@@ -5,6 +5,7 @@ import (
 	"expense-tracker/models"
 	"expense-tracker/pkg/logger"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -21,7 +22,11 @@ var addCmd = &cobra.Command{
 		}
 
 		description := args[0]
-		amount := args[1]
+		amount, err := strconv.ParseFloat(args[1], 64)
+		if err != nil {
+			fmt.Println("Invalid amount.")
+			return
+		}
 
 		database, err := db.ConnectPostgres()
 		if err != nil {
