@@ -6,10 +6,11 @@ import (
 	"expense-tracker/pkg/logger"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/spf13/cobra"
 )
+
+var dateStr string
 
 var addCmd = &cobra.Command{
 	Use:   "add",
@@ -34,16 +35,17 @@ var addCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		expense := models.Expense{
-			Description: description,
-			Amount:      amount,
-			CreatedAt:   time.Now(),
-		}
+		dateStr = args[2]
 
-		if err := models.AddExpense(database, &expense); err != nil {
+		if err := models.AddExpense(database, description, amount, dateStr); err != nil {
 			panic(err)
 		}
 
 		logger.Info("Expense added")
 	},
+}
+
+func init() {
+	addCmd.Flags().StringVarP(&dateStr, "date", "d", "", "Expense date (format: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM')")
+
 }

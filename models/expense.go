@@ -15,13 +15,47 @@ type Expense struct {
 	CreatedAt   time.Time
 }
 
-func AddExpense(db *sql.DB, expense *Expense) error {
-	_, err := db.Exec(`
+func AddExpense(db *sql.DB, description string, amount float64, dateStr string) error {
+	var createdAt time.Time
+	var err error
+
+	if dateStr == "" {
+		createdAt = time.Now()
+	} else {
+		// Try full datetime first: "2006-01-02 15:04"
+		createdAt, err = time.Parse("2006-01-02 15:04", dateStr)
+		if err != nil {
+			// If fail, try date only: "2006-01-02"
+			createdAt, err = time.Parse("2006-01-02", dateStr)
+			if err != nil {
+				return fmt.Errorf("invalid date format. Use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'")
+			}
+			// Set default time to noon if only date is given
+			createdAt = createdAt.Add(12 * time.Hour)
+		}
+	}
+
+	expense := Expense{
+		Description: description,
+		Amount:      amount,
+		CreatedAt:   createdAt,
+	}
+
+	_, err = db.Exec(`
 		INSERT INTO expenses (description, amount, created_at)
 		VALUES ($1, $2, $3)
 	`, expense.Description, expense.Amount, expense.CreatedAt)
+
 	return err
 }
+
+// func AddExpense(db *sql.DB, expense *Expense) error {
+// 	_, err := db.Exec(`
+// 		INSERT INTO expenses (description, amount, created_at)
+// 		VALUES ($1, $2, $3)
+// 	`, expense.Description, expense.Amount, expense.CreatedAt)
+// 	return err
+// }
 
 func DeleteExpense(db *sql.DB, id int) error {
 	_, err := db.Exec(`DELETE FROM expenses WHERE id = $1`, id)
