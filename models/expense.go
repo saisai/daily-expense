@@ -97,3 +97,29 @@ func ExportMonthlyReport(db *sql.DB, month string, filename string) error {
 
 	return f.SaveAs(filename)
 }
+
+func ListExpensesByMonth(db *sql.DB, month string) ([]Expense, error) {
+	query := `
+		SELECT id, description, amount, created_at
+		FROM expenses
+		WHERE TO_CHAR(created_at, 'YYYY-MM') = $1
+		ORDER BY created_at ASC
+	`
+
+	rows, err := db.Query(query, month)
+	if err != nil {
+		return nil, fmt.Errorf("query expenses by month: %w", err)
+	}
+	defer rows.Close()
+
+	var expenses []Expense
+	for rows.Next() {
+		var e Expense
+		if err := rows.Scan(&e.ID, &e.Description, &e.Amount, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan expense: %w", err)
+		}
+		expenses = append(expenses, e)
+	}
+
+	return expenses, nil
+}
