@@ -34,8 +34,11 @@ var addCmd = &cobra.Command{
 			panic(err)
 		}
 		defer database.Close()
-
-		dateStr = args[2]
+		if len(args) > 2 {
+			dateStr = args[2]
+		} else {
+			dateStr = ""
+		}
 
 		if err := models.AddExpense(database, description, amount, dateStr); err != nil {
 			panic(err)
