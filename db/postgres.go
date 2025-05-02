@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	constants "expense-tracker/const"
 	"fmt"
 	"log"
 	"os"
@@ -9,10 +10,6 @@ import (
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-)
-
-const (
-	DEVELOPMENT_MODE = 1
 )
 
 func initDB(db *sql.DB) {
@@ -53,7 +50,7 @@ func getEnvFilePath() (string, error) {
 
 func ConnectPostgres() (*sql.DB, error) {
 
-	if DEVELOPMENT_MODE == 0 {
+	if constants.DEVELOPMENT_MODE == 0 {
 		err := godotenv.Load()
 		if err != nil {
 			log.Fatal("Error loading .env file")

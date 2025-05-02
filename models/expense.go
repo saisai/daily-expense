@@ -2,7 +2,10 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
+	redisdb "expense-tracker/pkg/redis"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/xuri/excelize/v2"
@@ -41,12 +44,79 @@ func AddExpense(db *sql.DB, description string, amount float64, dateStr string) 
 		CreatedAt:   createdAt,
 	}
 
-	_, err = db.Exec(`
+	_, _ = db.Exec(`
 		INSERT INTO expenses (description, amount, created_at)
 		VALUES ($1, $2, $3)
 	`, expense.Description, expense.Amount, expense.CreatedAt)
 
+	year, month := createdAt.Year(), createdAt.Month()
+	fmt.Println("created at ", year, fmt.Sprintf("%02d", int(month)))
+
+	yearMonth := fmt.Sprintf("%s-%s", strconv.Itoa(year), string(fmt.Sprintf("%02d", int(month))))
+	result, err := ListExpensesByMonth(db, yearMonth)
+	if err != nil {
+		return err
+	}
+
+	err = redisdb.InitRedis()
+	if err != nil {
+		return err
+	}
+	// fmt.Println(result)
+	// err = redisdb.Rdb.RPush(redisdb.Ctx, yearMonth, json.Marshal(result)).Err()
+
+	err = pushExpensesToRedis(yearMonth, result)
+	if err != nil {
+		fmt.Printf("Redis push error for key %s: %v\n", yearMonth, err)
+		return err
+	}
+
+	// result, err = getExpensesFromRedis(yearMonth)
+	// if err != nil {
+	// 	fmt.Printf("Redis push error for key %s: %v\n", yearMonth, err)
+	// 	return err
+	// }
+	// for _, d := range result {
+	// 	fmt.Println(d)
+	// }
+
 	return err
+}
+
+func pushExpensesToRedis(key string, expenses []Expense) error {
+	serializedExpenses := make([]string, len(expenses))
+	for i, expense := range expenses {
+		jsonData, err := json.Marshal(expense)
+		if err != nil {
+			return fmt.Errorf("failed to marshal expense to JSON: %w", err)
+		}
+		serializedExpenses[i] = string(jsonData)
+	}
+
+	err := redisdb.Rdb.RPush(redisdb.Ctx, key, serializedExpenses).Err()
+	if err != nil {
+		return fmt.Errorf("failed to push to Redis: %w", err)
+	}
+	return nil
+}
+
+func GetExpensesFromRedis(key string) ([]Expense, error) {
+
+	stringExpenses, err := redisdb.Rdb.LRange(redisdb.Ctx, key, 0, -1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get data from Redis: %w", err)
+	}
+
+	expenses := make([]Expense, len(stringExpenses))
+	for i, s := range stringExpenses {
+		var expense Expense
+		err := json.Unmarshal([]byte(s), &expense)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal JSON to Expense: %w", err)
+		}
+		expenses[i] = expense
+	}
+	return expenses, nil
 }
 
 // func AddExpense(db *sql.DB, expense *Expense) error {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"expense-tracker/db"
 	"expense-tracker/models"
+	redisdb "expense-tracker/pkg/redis"
 	"fmt"
 	"os"
 
@@ -29,7 +30,28 @@ var listCmd = &cobra.Command{
 		}
 		defer database.Close()
 
-		expenses, err := models.ListExpensesByMonth(database, month)
+		err = redisdb.InitRedis()
+		if err != nil {
+			fmt.Printf("Redis push error for key %s: %v\n", month, err)
+		}
+
+		cacheResult, err := models.GetExpensesFromRedis(month)
+		if err != nil {
+			fmt.Printf("Redis push error for key %s: %v\n", month, err)
+		}
+		// for _, d := range result {
+		// 	fmt.Println(d)
+		// }
+
+		var expenses []models.Expense
+
+		if len(cacheResult) > 0 {
+			expenses = cacheResult
+			fmt.Println("testing")
+		} else {
+			expenses, err = models.ListExpensesByMonth(database, month)
+		}
+
 		if err != nil {
 			fmt.Println("Error listing expenses:", err)
 			os.Exit(1)
@@ -43,13 +65,15 @@ var listCmd = &cobra.Command{
 			fmt.Println("Exported to", exportFile)
 		} else {
 			fmt.Println("ID\t\tDate\t\tDescription\t\tAmount")
-			fmt.Println("-------------------------------------------------------------")
+			fmt.Println("--------------------------------------------------------------")
 			total := 0.0
+			totalRows := 0
 			for _, e := range expenses {
 				fmt.Printf("%d\t\t%s\t%-20s\t%.2f\n", e.ID, e.CreatedAt.Format("2006-01-02"), e.Description, e.Amount)
 				total += e.Amount
+				totalRows++
 			}
-			fmt.Printf("\n\t\t\t\t%-20s\t%.2f\n", "Total", total)
+			fmt.Printf("\nTotal Record: %d\t\t\t%-20s\t%.2f\n", totalRows, "Total", total)
 		}
 	},
 }
