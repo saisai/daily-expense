@@ -36,21 +36,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ;Name: "armenian"; MessagesFile: "compiler:Languages\Armenian.isl"
 ;Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
-;[Files]
-;Source: "{#DistDir}\Dailyexpense\expense.exe"; DestDir: "{app}"; Flags: ignoreversion
-;Source: "{#DistDir}\Dailyexpense\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Files]
 Source: "{#DistDir}\Dailyexpense\bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "{#DistDir}\Dailyexpense\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-;[Run]
-;Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-;This will create the service.
-;Filename: "{app}\psql_install.cmd"; Description: "Register PostgreSQL Service"; Flags:runhidden; WorkingDir:"{app}"
-; Don't show the command window
-; Check the return code.  Non-zero means an error.
+[Tasks]
+Name: "addtopath"; Description: "Add to PATH (requires shell restart)"; GroupDescription: "Other:"
+
+[Run]
+Filename: "{app}\psql_install.cmd"; Description: "Register PostgreSQL Service"; Flags:runhidden; WorkingDir:"{app}"
+Filename: "{app}\redis_install.cmd"; Description: "Register Redis Service"; Flags:runhidden; WorkingDir:"{app}"
 
 
 [Icons]
@@ -59,98 +55,88 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 
 [Registry]
-; Add {app}\bin to USER's PATH (during install)
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
-    ValueData: "{olddata};{app}\bin"; Flags: preservestringtype uninsdeletevalue
+; Environment
+#define EnvironmentRootKey "HKCU"
+#define EnvironmentKey "Environment"
+#define Uninstall64RootKey "HKCU64"
+#define Uninstall32RootKey "HKCU32"
+
+
+Root: {#EnvironmentRootKey}; Subkey: "{#EnvironmentKey}"; ValueType: expandsz; ValueName: "Path"; ValueData: "{code:AddToPath|{app}\bin}"; Tasks: addtopath; Check: NeedsAddToPath(ExpandConstant('{app}\bin'))
+
 
 [Code]
-type
-  WPARAM = LongWord;
-  LPARAM = LongInt;
-
-const
-  WM_SETTINGCHANGE = $001A;
-  SMTO_ABORTIFHUNG = $0002;
-
-  
-function SendMessageTimeout(hWnd: HWND; Msg: UINT; wParam: WPARAM;
-  lParam: LPARAM; fuFlags: UINT; uTimeout: UINT; out lpdwResult: DWORD): DWORD;
-  external 'SendMessageTimeoutW@user32.dll stdcall';
-  
-procedure RefreshEnvironment;
+function NeedsAddToPath(Param: string): boolean;
 var
-  Env: Cardinal;
+  OrigPath: string;
 begin
-  SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-    LPARAM(ExpandConstant('Environment')), SMTO_ABORTIFHUNG, 5000, Env);
-end;
-
-function SplitString(const S: String; Separator: Char): TArrayOfString;
-var
-  I, J, N: Integer;
-begin
-  N := 1;
-  for I := 1 to Length(S) do
-    if S[I] = Separator then
-      Inc(N);
-
-  SetArrayLength(Result, N);
-
-  N := 0;
-  J := 1;
-  for I := 1 to Length(S) do
-  begin
-    if S[I] = Separator then
-    begin
-      Result[N] := Copy(S, J, I - J);
-      J := I + 1;
-      Inc(N);
-    end;
+  if not RegQueryStringValue({#EnvironmentRootKey}, '{#EnvironmentKey}', 'Path', OrigPath)
+  then begin
+    Result := True;
+    exit;
   end;
-  Result[N] := Copy(S, J, Length(S) - J + 1);
+  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
 end;
 
-// Remove our {app}\bin from PATH during uninstall
-procedure RemoveFromPath;
+
+// https://stackoverflow.com/a/23838239/261019
+procedure Explode(var Dest: TArrayOfString; Text: String; Separator: String);
 var
-  Path, NewPath, AppBin: string;
-  I: Integer;
-  Paths: TArrayOfString;
+  i, p: Integer;
 begin
-  AppBin := ExpandConstant('{app}\bin');
-  if not RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', Path) then
-    Exit;
-
-  // Split the PATH by semicolon
-  Paths := SplitString(Path, ';');
-  NewPath := '';
-  for I := 0 to GetArrayLength(Paths) - 1 do
-  begin
-    if CompareText(Paths[I], AppBin) <> 0 then
-    begin
-      if NewPath <> '' then
-        NewPath := NewPath + ';';
-      NewPath := NewPath + Paths[I];
+  i := 0;
+  repeat
+    SetArrayLength(Dest, i+1);
+    p := Pos(Separator,Text);
+    if p > 0 then begin
+      Dest[i] := Copy(Text, 1, p-1);
+      Text := Copy(Text, p + Length(Separator), Length(Text));
+      i := i + 1;
+    end else begin
+      Dest[i] := Text;
+      Text := '';
     end;
-  end;
-
-  // Write the new cleaned PATH back
-  RegWriteStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', NewPath);
+  until Length(Text)=0;
 end;
 
-// Hook into uninstall step
+function AddToPath(VSCode: string): string;
+var
+  OrigPath: string;
+begin
+  RegQueryStringValue({#EnvironmentRootKey}, '{#EnvironmentKey}', 'Path', OrigPath)
+
+  if (Length(OrigPath) > 0) and (OrigPath[Length(OrigPath)] = ';') then
+    Result := OrigPath + VSCode
+  else
+    Result := OrigPath + ';' + VSCode
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Path: string;
+  ThisAppPath: string;
+  Parts: TArrayOfString;
+  NewPath: string;
+  i: Integer;
 begin
-  if CurUninstallStep = usPostUninstall then
-  begin
-    RemoveFromPath;
-    RefreshEnvironment;
+  if not CurUninstallStep = usUninstall then begin
+    exit;
   end;
+  if not RegQueryStringValue({#EnvironmentRootKey}, '{#EnvironmentKey}', 'Path', Path)
+  then begin
+    exit;
+  end;
+  NewPath := '';
+  ThisAppPath := ExpandConstant('{app}')
+  Explode(Parts, Path, ';');
+  for i:=0 to GetArrayLength(Parts)-1 do begin
+    if CompareText(Parts[i], ThisAppPath) <> 0 then begin
+      NewPath := NewPath + Parts[i];
+      if i < GetArrayLength(Parts) - 1 then begin
+        NewPath := NewPath + ';';
+      end;
+    end;
+  end;
+  RegWriteExpandStringValue({#EnvironmentRootKey}, '{#EnvironmentKey}', 'Path', NewPath);
 end;
 
-// Hook into install step
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then
-    RefreshEnvironment;
-end;
