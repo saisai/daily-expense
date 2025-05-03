@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"encoding/json"
+	"expense-tracker/db"
 	redisdb "expense-tracker/pkg/redis"
 	"fmt"
 	"strconv"
@@ -18,7 +19,8 @@ type Expense struct {
 	CreatedAt   time.Time
 }
 
-func AddExpense(db *sql.DB, description string, amount float64, dateStr string) error {
+func AddExpense(description string, amount float64, dateStr string) error {
+
 	var createdAt time.Time
 	var err error
 
@@ -44,16 +46,13 @@ func AddExpense(db *sql.DB, description string, amount float64, dateStr string) 
 		CreatedAt:   createdAt,
 	}
 
-	_, _ = db.Exec(`
-		INSERT INTO expenses (description, amount, created_at)
-		VALUES ($1, $2, $3)
-	`, expense.Description, expense.Amount, expense.CreatedAt)
+	db.DB.Create(&expense)
 
 	year, month := createdAt.Year(), createdAt.Month()
 	fmt.Println("created at ", year, fmt.Sprintf("%02d", int(month)))
 
 	yearMonth := fmt.Sprintf("%s-%s", strconv.Itoa(year), string(fmt.Sprintf("%02d", int(month))))
-	result, err := ListExpensesByMonth(db, yearMonth)
+	result, err := ListExpensesByMonth(yearMonth)
 	if err != nil {
 		return err
 	}
@@ -119,17 +118,8 @@ func GetExpensesFromRedis(key string) ([]Expense, error) {
 	return expenses, nil
 }
 
-// func AddExpense(db *sql.DB, expense *Expense) error {
-// 	_, err := db.Exec(`
-// 		INSERT INTO expenses (description, amount, created_at)
-// 		VALUES ($1, $2, $3)
-// 	`, expense.Description, expense.Amount, expense.CreatedAt)
-// 	return err
-// }
-
-func DeleteExpense(db *sql.DB, id int) error {
-	_, err := db.Exec(`DELETE FROM expenses WHERE id = $1`, id)
-	return err
+func DeleteExpense(id int) {
+	db.DB.Delete(&Expense{}, id)
 }
 
 type DailyTotal struct {
@@ -137,36 +127,41 @@ type DailyTotal struct {
 	Total float64
 }
 
-func GetMonthlyTotals(db *sql.DB, month string) ([]DailyTotal, float64, error) {
-	rows, err := db.Query(`
-		SELECT DATE(created_at) as day, SUM(amount)
-		FROM expenses
-		WHERE TO_CHAR(created_at, 'YYYY-MM') = $1
-		GROUP BY day
-		ORDER BY day ASC
-	`, month)
+type DailySum struct {
+	Day   string // or time.Time if you prefer
+	Total float64
+}
+
+func GetMonthlyTotals(month string) ([]DailyTotal, float64, error) {
+	var results []DailySum
+
+	query := `
+        SELECT TO_CHAR(created_at, 'YYYY-MM-DD') as day, SUM(amount) as total
+        FROM expenses
+        WHERE TO_CHAR(created_at, 'YYYY-MM') = ?
+        GROUP BY day
+        ORDER BY day ASC
+    `
+	err := db.DB.Raw(query, month).Scan(&results).Error
+
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
 
 	var totals []DailyTotal
 	var monthlyTotal float64
 
-	for rows.Next() {
-		var day string
+	for _, s := range results {
+		// var day string
 		var total float64
-		if err := rows.Scan(&day, &total); err != nil {
-			return nil, 0, err
-		}
-		totals = append(totals, DailyTotal{Date: day, Total: total})
+		totals = append(totals, DailyTotal{Date: s.Day, Total: s.Total})
 		monthlyTotal += total
 	}
 	return totals, monthlyTotal, nil
 }
 
 func ExportMonthlyReport(db *sql.DB, month string, filename string) error {
-	totals, monthlyTotal, err := GetMonthlyTotals(db, month)
+	totals, monthlyTotal, err := GetMonthlyTotals(month)
 	if err != nil {
 		return err
 	}
@@ -202,30 +197,16 @@ func ExportMonthlyReport(db *sql.DB, month string, filename string) error {
 	return f.SaveAs(filename)
 }
 
-func ListExpensesByMonth(db *sql.DB, month string) ([]Expense, error) {
-	query := `
-		SELECT id, description, amount, created_at
-		FROM expenses
-		WHERE TO_CHAR(created_at, 'YYYY-MM') = $1
-		ORDER BY created_at ASC
-	`
-
-	rows, err := db.Query(query, month)
-	if err != nil {
-		return nil, fmt.Errorf("query expenses by month: %w", err)
-	}
-	defer rows.Close()
-
+func ListExpensesByMonth(month string) ([]Expense, error) {
 	var expenses []Expense
-	for rows.Next() {
-		var e Expense
-		if err := rows.Scan(&e.ID, &e.Description, &e.Amount, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan expense: %w", err)
-		}
-		expenses = append(expenses, e)
-	}
-
-	return expenses, nil
+	query := `
+        SELECT id, description, amount, created_at
+        FROM expenses
+        WHERE TO_CHAR(created_at, 'YYYY-MM') = $1
+        ORDER BY created_at ASC
+    `
+	err := db.DB.Raw(query, month).Scan(&expenses).Error
+	return expenses, err
 }
 
 func ExportExpensesDetailToExcel(expenses []Expense, month, filename string) error {

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"expense-tracker/db"
 	"expense-tracker/models"
 	"expense-tracker/pkg/logger"
 	"fmt"
@@ -29,18 +28,13 @@ var addCmd = &cobra.Command{
 			return
 		}
 
-		database, err := db.ConnectPostgres()
-		if err != nil {
-			panic(err)
-		}
-		defer database.Close()
 		if len(args) > 2 {
 			dateStr = args[2]
 		} else {
 			dateStr = ""
 		}
 
-		if err := models.AddExpense(database, description, amount, dateStr); err != nil {
+		if err := models.AddExpense(description, amount, dateStr); err != nil {
 			panic(err)
 		}
 
@@ -50,5 +44,4 @@ var addCmd = &cobra.Command{
 
 func init() {
 	addCmd.Flags().StringVarP(&dateStr, "date", "d", "", "Expense date (format: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM')")
-
 }

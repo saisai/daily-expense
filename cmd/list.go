@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"expense-tracker/db"
 	"expense-tracker/models"
 	redisdb "expense-tracker/pkg/redis"
 	"fmt"
@@ -23,14 +22,7 @@ var listCmd = &cobra.Command{
 
 		month := args[0]
 
-		database, err := db.ConnectPostgres()
-		if err != nil {
-			fmt.Println("DB connection failed:", err)
-			os.Exit(1)
-		}
-		defer database.Close()
-
-		err = redisdb.InitRedis()
+		err := redisdb.InitRedis()
 		if err != nil {
 			fmt.Printf("Redis push error for key %s: %v\n", month, err)
 		}
@@ -49,7 +41,7 @@ var listCmd = &cobra.Command{
 			expenses = cacheResult
 			fmt.Println("testing")
 		} else {
-			expenses, err = models.ListExpensesByMonth(database, month)
+			expenses, err = models.ListExpensesByMonth(month)
 		}
 
 		if err != nil {

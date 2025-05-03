@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"expense-tracker/db"
 	"expense-tracker/models"
 	"fmt"
 	"strconv"
@@ -23,15 +22,7 @@ var deleteCmd = &cobra.Command{
 			panic(err)
 		}
 
-		database, err := db.ConnectPostgres()
-		if err != nil {
-			panic(err)
-		}
-		defer database.Close()
-
-		if err := models.DeleteExpense(database, id); err != nil {
-			panic(err)
-		}
+		models.DeleteExpense(id)
 
 		fmt.Println("Expense deleted!")
 	},

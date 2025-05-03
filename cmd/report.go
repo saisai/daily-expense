@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"expense-tracker/db"
 	"expense-tracker/models"
 	"expense-tracker/pkg/logger"
 	"fmt"
@@ -20,12 +19,7 @@ var reportCmd = &cobra.Command{
 
 		month := args[0]
 
-		database, err := db.ConnectPostgres()
-		if err != nil {
-			panic(err)
-		}
-		defer database.Close()
-		totals, monthlyTotal, err := models.GetMonthlyTotals(database, month)
+		totals, monthlyTotal, err := models.GetMonthlyTotals(month)
 		if err != nil {
 			panic(err)
 		}
